@@ -3,6 +3,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 import org.apache.bcel.classfile.ClassParser;
@@ -12,11 +13,13 @@ import org.apache.bcel.classfile.Field;
 import org.apache.bcel.classfile.EmptyVisitor;
 import org.apache.*;
 import org.apache.bcel.generic.ClassGen;
+import org.apache.bcel.generic.GOTO;
 import org.apache.bcel.generic.Instruction;
 import org.apache.bcel.generic.InstructionHandle;
 import org.apache.bcel.generic.InstructionList;
 import org.apache.bcel.generic.InstructionTargeter;
 import org.apache.bcel.generic.MethodGen;
+import org.apache.bcel.generic.TargetLostException;
 import org.apache.bcel.generic.Visitor;
 
 public class ByteCodeOptimizer
@@ -38,53 +41,70 @@ public class ByteCodeOptimizer
 		}
 	}
 	
-	private void optimize()
-	{
-		ClassGen gen = new ClassGen(original);
-		//array of methods in the supplied class.
-		Method[] methods = gen.getMethods();
-		
-		//cycle through these methods to see if any optimization is needed
-		//in the example there are two methods; method one has no GOTOs, but method two does.
-		for (int i = 0; i < methods.length; i ++)
-		{
-			//Check method's code to see if goto exists.
-			String method = methods[i].getCode().toString();
-			if (method.contains("goto"))
-			{
-				//The MethodGen object lets you edit a method.
-				//Here I am copying the method from the original class into this object.
-				MethodGen mg = new MethodGen(methods[i], original.getClassName(), gen.getConstantPool());
-				
-				//Get list of instructions from method.
-				InstructionList il = mg.getInstructionList();
-				
-				//Get array of instruction handles.
-				InstructionHandle[] ih = il.getInstructionHandles();	
-				
-				//Cycle through instructions to see which one has a goto.
-				for(int j = 0; j < ih.length; j ++)
-				{
-					if (ih[j].getInstruction().toString().contains("goto"))
-					{
-						//mark first position, we now need to find where the final goto is.
-						int first = ih[j].getPosition();
-						int second = 0;
-						InstructionHandle current = ih[j];
-						InstructionHandle next = ih[j].getNext();
-						//the algorithm works like this
-						//1. get the next instruction from here. use current.getNext(); [i think!]
-						//2. check to see if it is a GOTO. if it is a GOTO, mark second as it's index. Get index by using getPosition(). repeat from step 1.
-						//3. if it is not a GOTO, get index of this instruction, create a new GOTO at first index which targets the instruction at second.
-						//4. somehow delete all the redundant GOTOs...not sure what the best way would be. Perhaps while traversing through the code, you store all the redundant GOTOs indexes in an arraylist or something? not sure.
-						//5. done. well...ensure the whole method has been accounted for. as in, all GOTOs in a method have been optimized.
-					}
-				}
-			}
-		}
-		
-		this.optimized = gen.getJavaClass();
-	}
+	  private void optimize()
+      {
+		  ClassGen gen = new ClassGen(original);
+		  Method[] methods = gen.getMethods();
+
+		  for (int i = 0; i < methods.length; i ++)
+		  {
+			  String method = methods[i].getCode().toString();
+			  if (method.contains("goto"))
+			  {
+				  MethodGen mg = new MethodGen(methods[i], original.getClassName(), gen.getConstantPool());
+
+				  InstructionList oldInstructionList = mg.getInstructionList();
+				  InstructionList newInstructionList = new InstructionList();
+
+				  ArrayList<Integer> gotoIndices = new ArrayList<Integer>();
+
+				  InstructionHandle[] ih = oldInstructionList.getInstructionHandles();   
+
+				  int size = 0;
+				  int additional = 0;
+				  for(int j = 0; j < ih.length; j ++)
+				  {
+
+					  if((ih[j].getInstruction().toString().contains("goto")) && (gotoIndices.contains(ih[j].getPosition())) )
+					  {
+						  additional++;
+					  }
+					  else if (ih[j].getInstruction().toString().contains("goto"))
+					  {
+						  InstructionHandle current = ih[j];
+
+						  while(current.getInstruction().toString().contains("goto"))
+						  {
+							  current = current.getNext();
+							  gotoIndices.add(current.getPosition());
+							  size++;
+						  }
+
+						  for (int c = 0; c < size-1 + additional; c ++)
+						  {
+							  current = current.getPrev();
+						  }
+
+						  GOTO newGoto = new GOTO(current);
+						  newInstructionList.append(newGoto);
+						  size = 0;
+					  }
+					  else
+					  {
+						  newInstructionList.append(ih[j].getInstruction());
+
+					  }
+				  }
+				  mg.setInstructionList(newInstructionList);
+				  Method updated = mg.getMethod();
+				  gen.removeMethod(methods[i]);
+				  gen.addMethod(updated);
+			  }
+		  }
+
+		  this.optimized = gen.getJavaClass();
+
+      }
 	
 	public void write(String optimisedFilePath)
 	{
